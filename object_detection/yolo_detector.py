@@ -8,7 +8,7 @@ import numpy as np
 
 '''
 
-class YOLO_Detector:
+class YOLODetector:
 
     def __init__(self, model_path):
         '''
@@ -36,7 +36,7 @@ class YOLO_Detector:
         
 
 if __name__ == '__main__':
-    yolo = YOLO_Detector('yolov8s.pt')
+    yolo = YOLODetector('yolov8s.pt')
     frame = cv2.imread('test.jpg')
     boxes, conf = yolo.detect(frame)
     print(boxes)

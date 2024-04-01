@@ -7,6 +7,7 @@ from cv_bridge import CvBridge, CvBridgeError
 import cv2
 import numpy as np
 import threading
+from yolo_detector import YOLODetector
 
 '''
 Subscribes to stereo camera and rgb images.
@@ -61,8 +62,7 @@ class ObjectDetectionNode(Node):
         self.objects_2D_ = Detection2DArray()
         self.objects_3D_ = Detection3DArray()
 
-        self.left_stereo_image_ts_ = HeaderTime()
-        self.right_stereo_image_ts_ = HeaderTime()
+        self.depth_image_ts_ = HeaderTime()
         self.rgb_image_ts_ = HeaderTime()
 
         # Subscribers
@@ -74,6 +74,8 @@ class ObjectDetectionNode(Node):
         self.objects_pub_2D_ = self.create_publisher(Detection2DArray, self.objects_2D_topic_, 10)
 
         self.sync_timer_ = self.create_timer(0.033, self.sync_images)
+
+        self.detector_ = YOLODetector('yolov8s.pt')
 
         self.lock_images = threading.Lock()
 
@@ -89,7 +91,7 @@ class ObjectDetectionNode(Node):
         return float(time_stamp.sec + (time_stamp.nanosec / 1000000000.0))
 
 
-    def depth_callback(self, left_image: Image):
+    def depth_callback(self, depth_image: Image):
         '''
         params:
         msg: Image
@@ -98,8 +100,8 @@ class ObjectDetectionNode(Node):
         None
         '''
         try:
-            self.left_stereo_image_ts_ = self.get_ts(left_image.header.stamp)
-            self.left_stereo_image = CvBridge().imgmsg_to_cv2(left_image, desired_encoding="passthrough")
+            self.depth_image_ts_ = self.get_ts(depth_image.header.stamp)
+            self.depth_image_ = CvBridge().imgmsg_to_cv2(depth_image, desired_encoding="passthrough")
         except CvBridgeError as e:
             self._logger.warning(f'Issue Converting left stereo image: {e}')
 
@@ -113,7 +115,7 @@ class ObjectDetectionNode(Node):
         '''
         try:
             self.rgb_image_ts_ = self.get_ts(rgb_image.header.stamp)
-            self.rgb_image = CvBridge().imgmsg_to_cv2(rgb_image)
+            self.rgb_image_ = CvBridge().imgmsg_to_cv2(rgb_image)
         except CvBridgeError as e:
             self._logger.warning(f'Issue Converting rgb image: {e}')
 
@@ -127,10 +129,7 @@ class ObjectDetectionNode(Node):
         '''
         self.lock_images.acquire()
 
-        if self.left_stereo_image_ts_ != self.right_stereo_image_ts_:
-            self._logger.warning('Left and Right Stereo Images Synchronized')
-            
-        cv2.imshow('Stereo Image', self.depth_image_)
+        cv2.imshow('Stereo Image', self.rgb_image_)
         cv2.waitKey(1)
             
         self.detect_objects(self.depth_image_, self.rgb_image_)
@@ -149,6 +148,42 @@ class ObjectDetectionNode(Node):
         '''
         pass
 
+    def dewarp_and_level_rgb(self, rgb_image: np.ndarray):
+        '''
+        params:
+        rgb_image: np.ndarray
+
+        returns:
+        None
+        '''
+        pass
+
+    def match_rgb_depth(self, rgb_image: np.ndarray, depth_image: np.ndarray):
+        '''
+        params:
+        rgb_image: np.ndarray
+        depth_image: np.ndarray
+
+        returns:
+        rgb_matching
+        '''
+        pass
+
+    def get_object_depth(self, depth_image: np.ndarray, box: np.ndarray) -> float:
+        '''
+        params:
+        depth_image: np.ndarray
+        box: np.ndarray -> (x, y, w, h)
+
+        returns:
+        depth: float
+        '''
+        
+        obj_depth = depth_image[box[1]:(box[1] + box[3]), box[0]:(box[0] + box[2])] * 0.001
+
+        return obj_depth
+
+
     def publish_objects(self):
         '''
         params:
@@ -158,13 +193,3 @@ class ObjectDetectionNode(Node):
         None
         '''
         pass
-
-    def run(self):
-        '''
-        params:
-        None
-
-        returns:
-        None
-        '''
-        pass    
