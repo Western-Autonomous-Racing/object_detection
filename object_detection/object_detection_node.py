@@ -36,10 +36,11 @@ class ObjectDetectionNode(Node):
         self.declare_parameter('objects_3D_topic', '/objects_3D')
         self.declare_parameter('objects_2D_topic', '/objects_2D')
         self.declare_parameter('stereo_image_dimensions', [648, 480])
-        self.declare_parameter('rgb_image_dimensions', [1920, 1080])
-        self.declare_parameter('model_path', 'yolov8s.pt')
-        self.declare_parameter('intrinsic_path', '/home/formatspecifier/Projects/object_detection/object_detection/intrinsics/chain_b0179.yaml')
-        
+        self.declare_parameter('rgb_image_dimensions', [1280, 720])
+        self.declare_parameter('model_path', 'yolov8n.pt')
+        self.declare_parameter('intrinsic_path', '/home/war/object_detection_ws/src/object_detection/intrinsics/intrinsics_720.yaml')
+        self.declare_parameter('depth_kernel', 30)
+
         if self.has_parameter('depth_camera_topic'):
             self.depth_topic_ = self.get_parameter('depth_camera_topic').get_parameter_value().string_value
 
@@ -67,6 +68,9 @@ class ObjectDetectionNode(Node):
             self.mtx = fs.getNode('camera_matrix').mat()
             self.dist = fs.getNode('dist_coeff').mat()
 
+        if self.has_parameter('depth_kernel'):
+            self.depth_kernel = self.get_parameter('depth_kernel').get_parameter_value().integer_value
+
         # Fields
 
         self.depth_image_= np.zeros(self.stereo_image_dimensions)
@@ -84,11 +88,17 @@ class ObjectDetectionNode(Node):
         # Publishers
         self.objects_pub_2D_ = self.create_publisher(Detection2DArray, self.objects_2D_topic_, 10)
 
-        self.sync_timer_ = self.create_timer(0.033, self.sync_images)
+        # self.sync_timer_ = self.create_timer(0.0001, self.sync_images)
 
-        self.detector_ = YOLODetector('yolov8s.pt')
+        self.detector_ = YOLODetector('yolov8n.pt')
 
         self.lock_images = threading.Lock()
+
+        self.detection_thread_ = threading.Thread(target=self.sync_images)
+        self.detection_thread_.start()
+
+    def shutdown(self):
+        self.detection_thread_.join()
 
     def get_ts(self, time_stamp: HeaderTime) -> float:
         '''
@@ -138,14 +148,12 @@ class ObjectDetectionNode(Node):
         returns:
         None
         '''
-        self.lock_images.acquire()
+        while (True):
+            self.lock_images.acquire()
+                
+            self.detect_objects(self.depth_image_, self.rgb_image_)
 
-        cv2.imshow('Stereo Image', self.rgb_image_)
-        cv2.waitKey(1)
-            
-        self.detect_objects(self.depth_image_, self.rgb_image_)
-
-        self.lock_images.release()
+            self.lock_images.release()
     
     def detect_objects(self, depth_image: np.ndarray, rgb_image: np.ndarray):
         '''
@@ -160,14 +168,51 @@ class ObjectDetectionNode(Node):
         
         rect_rgb = self.dewarp_and_level_rgb(rgb_image)
         rgb_matching = self.match_rgb_depth(rect_rgb, depth_image)
+        rgb_matching = cv2.cvtColor(rgb_matching.astype(np.uint8), cv2.COLOR_BGR2RGB)
         boxes, conf = self.detector_.detect(rgb_matching)
+        box_np_arr = []
+        conf_np_arr = []
         boxes_depth = []
-        for box in boxes:
-            obj_depth = self.get_object_depth(depth_image, box)
-            boxes_depth.append(obj_depth)
+        conf_idx = 0
+        for i in range(len(boxes)):
 
-        self.publish_objects(boxes, conf, boxes_depth)
-        
+            box_np = boxes[i].cpu().numpy()
+            conf_np = conf[i].cpu().numpy()
+
+            if len(box_np) == 0 or len(conf_np) == 0 or depth_image.size == 0:
+                continue
+                
+            obj_depth = self.get_object_depth(depth_image, box_np[i])
+            if obj_depth < 0.175:
+                continue
+                
+            boxes_depth.append(obj_depth)
+            box_np_arr.append(box_np)
+            conf_np_arr.append(conf_np)
+
+        # if len(box_np_arr) > 0 and len(conf_np_arr) > 0:
+        rgb_matching = cv2.cvtColor(rgb_matching, cv2.COLOR_RGB2BGR)
+        self.draw_boxes(rgb_matching, box_np_arr, conf_np_arr, boxes_depth)
+            # self.publish_objects(boxes, conf, boxes_depth)    
+
+    def draw_boxes(self, image: np.ndarray, boxes: list, conf: list, boxes_depth: list):
+        '''
+        params:
+        image: np.ndarray
+        boxes: list
+        conf: list
+
+        returns:
+        None
+        '''
+        for i in range(len(boxes)):
+            for j in range(len(boxes[i])):
+                box = boxes[i][j]
+                cv2.rectangle(image, (int(box[0] - box[2]/2), int(box[1] - box[3]/2)), (int(box[0] + box[2]/2), int(box[1] + box[3]/2)), (0, 255, 0), 2)
+                cv2.putText(image, f'Depth {round(boxes_depth[i], 3)} m', (int(box[0] - box[2]/2), int(box[1] - box[3]/2)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+        cv2.imshow('Detected Objects', image)
+        cv2.waitKey(1)
 
     def dewarp_and_level_rgb(self, rgb_image: np.ndarray) -> np.ndarray:
         '''
@@ -177,10 +222,8 @@ class ObjectDetectionNode(Node):
         returns:
         None
         '''
-        cv2.undistort(rgb_image, self.mtx, self.dist, rgb_image, self.mtx)
-        cv2.imshow('Undistorted Image', rgb_image)
-        cv2.waitKey(1)
-        return rgb_image
+        rgb_rect = cv2.undistort(rgb_image, self.mtx, self.dist)
+        return rgb_rect
 
     def match_rgb_depth(self, rgb_image: np.ndarray, depth_image: np.ndarray) -> np.ndarray:
         '''
@@ -192,7 +235,11 @@ class ObjectDetectionNode(Node):
         rgb_matching
         '''
         # rgb_matching = np.zeros(depth_image.shape)
-        rgb_matching = rgb_image
+        left = 300
+        right = 980
+        top = 120
+        bottom = 600
+        rgb_matching = rgb_image[top:bottom, left:right]
 
         return rgb_matching
 
@@ -205,10 +252,24 @@ class ObjectDetectionNode(Node):
         returns:
         depth: float
         '''
-        
-        obj_depth = depth_image[box[1]:(box[1] + box[3]), box[0]:(box[0] + box[2])] * 0.001
 
-        return float(obj_depth)
+        kernel = self.depth_kernel
+
+        if box[2] <= kernel or box[3] <= kernel:
+            return 0.0
+
+        centroid_x = (box[0]+box[2])/2
+        centroid_y = (box[1]+box[3])/2
+        candidate_center = depth_image[int(centroid_y - kernel/2) : int(centroid_y + kernel/2), int(centroid_x - kernel/2) : int(centroid_x + kernel/2)]
+        
+        if candidate_center.size == 0:
+            return 0.0
+        
+        #filter out upper 20th percentile
+        candidate_center = np.percentile(candidate_center, 80)
+        centroid_depth = np.median(candidate_center) * 0.001
+
+        return float(centroid_depth)
 
 
     def publish_objects(self, boxes: list, conf: list, boxes_depth: list):
@@ -227,7 +288,7 @@ class ObjectDetectionNode(Node):
         for i in range(len(boxes)):
             detection = Detection2D()
             detection.results = []
-            detection.header.stamp.sec = self.rgb_image_ts_
+            detection.header.stamp.sec = self.get_clock().now()
             detection.bbox.center.x = boxes[i][0]
             detection.bbox.center.y = boxes[i][1]
             detection.bbox.size_x = boxes[i][2]
@@ -238,6 +299,8 @@ class ObjectDetectionNode(Node):
             det.pose.pose.position.z = boxes_depth[i]
 
             detection.results.append(det)
-            # self.objects_2D_.detections.append(detection)
+            self.objects_2D_.detections.append(detection)
+
+        self.objects_pub_2D_.publish(self.objects_2D_)
 
 

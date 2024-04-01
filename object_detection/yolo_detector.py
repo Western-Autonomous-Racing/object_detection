@@ -19,7 +19,7 @@ class YOLODetector:
         '''
         self.model = YOLO(model_path)
 
-    def detect(self, frame) -> Tuple[list, list]:
+    def detect(self, frame) -> Tuple[np.ndarray, np.ndarray]:
         '''
         params:
         frame: input frame
@@ -27,9 +27,10 @@ class YOLODetector:
         boxes: detected boxes
         prob: detected probabilities
         '''
-        results = self.model(frame)
         boxes = []
         conf = []
+
+        results = self.model.track(frame, persist=True)
         for r in results:
             boxes.append(r.boxes.xywh)
             conf.append(r.boxes.conf)
