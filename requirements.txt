@@ -1,3 +1,5 @@
 numpy
 numba
 cv2
+ultralytics
+opencv-python
