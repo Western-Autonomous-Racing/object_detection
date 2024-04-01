@@ -1,6 +1,7 @@
 from ultralytics import YOLO
 import cv2
 import numpy as np
+from typing import Tuple
 
 '''
     Use YOLOv8
@@ -18,7 +19,7 @@ class YOLODetector:
         '''
         self.model = YOLO(model_path)
 
-    def detect(self, frame):
+    def detect(self, frame) -> Tuple[list, list]:
         '''
         params:
         frame: input frame
