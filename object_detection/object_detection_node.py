@@ -272,7 +272,7 @@ class ObjectDetectionNode(Node):
         return float(centroid_depth)
 
 
-    def publish_objects(self, boxes: list, conf: list, boxes_depth: list):
+    def publish_objects(self, image: np.ndarray, boxes: list, conf: list, boxes_depth: list):
         '''
         params:
         boxes: list
@@ -297,7 +297,6 @@ class ObjectDetectionNode(Node):
             det.id = 0
             det.score = conf[i]
             det.pose.pose.position.z = boxes_depth[i]
-
             detection.results.append(det)
             self.objects_2D_.detections.append(detection)
 
